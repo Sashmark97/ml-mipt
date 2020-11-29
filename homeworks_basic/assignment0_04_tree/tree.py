@@ -19,9 +19,28 @@ def entropy(y):
     EPS = 0.0005
 
     # YOUR CODE HERE
-    
-    return 0.
-    
+    '''
+    entropy = 0
+    classes_set = set()
+    decoded = one_hot_decode(y)
+    for x in decoded:
+        classes_set.add(x[0])
+
+    for class_sample in classes_set:
+        count = 0
+        for sample in decoded:
+            if sample == class_sample:
+                count += 1
+        probability = count / len(y)
+        entropy -= probability * np.log(probability + EPS)
+
+    return entropy
+    '''
+    probas = np.mean(y, axis=0)
+
+    return -np.sum(probas * np.log(probas + EPS))
+
+
 def gini(y):
     """
     Computes the Gini impurity of the provided distribution
@@ -38,9 +57,26 @@ def gini(y):
     """
 
     # YOUR CODE HERE
-    
-    return 0.
-    
+    '''
+    classes_set = set()
+    decoded = one_hot_decode(y)
+    for x in decoded:
+        classes_set.add(x[0])
+
+    gini = 1.0
+    for class_sample in classes_set:
+        count = 0
+        for sample in decoded:
+            if sample[0] == class_sample:
+                count += 1
+        gini -= (count / len(y)) ** 2
+    return gini
+    '''
+    probas = np.mean(y, axis=0)
+
+    return 1 - np.sum(probas ** 2)
+
+
 def variance(y):
     """
     Computes the variance the provided target values subset
@@ -155,7 +191,14 @@ class DecisionTree(BaseEstimator):
         """
 
         # YOUR CODE HERE
-        
+
+        features = X_subset[..., feature_index]
+        mapping = features < threshold
+        X_left = X_subset[mapping]
+        X_right = X_subset[np.invert(mapping)]
+
+        y_left = y_subset[mapping]
+        y_right = y_subset[np.invert(mapping)]
         return (X_left, y_left), (X_right, y_right)
     
     def make_split_only_y(self, feature_index, threshold, X_subset, y_subset):
@@ -189,7 +232,11 @@ class DecisionTree(BaseEstimator):
         """
 
         # YOUR CODE HERE
-        
+        features = X_subset[..., feature_index]
+        mapping = features < threshold
+
+        y_left = y_subset[mapping]
+        y_right = y_subset[np.invert(mapping)]
         return y_left, y_right
 
     def choose_best_split(self, X_subset, y_subset):
@@ -215,7 +262,21 @@ class DecisionTree(BaseEstimator):
 
         """
         # YOUR CODE HERE
-        return feature_index, threshold
+        best_threshold = 0
+        best_feature = 0
+        min_criterion = np.inf
+        current_uncertanty = self.criterion(y_subset)
+        for feature_id in range(X_subset.shape[1]):
+            for treshold in np.unique(X_subset[..., feature_id]):
+                y_left, y_right = self.make_split_only_y(feature_id, treshold, X_subset, y_subset)
+                prob = len(y_left) / len(X_subset)
+                weighted_criterion = current_uncertanty - prob * self.criterion(y_left) - \
+                                     (1 - prob) * self.criterion(y_right)
+                if weighted_criterion < min_criterion:
+                    best_feature = feature_id
+                    best_threshold = treshold
+                    min_criterion = weighted_criterion
+        return best_feature, best_threshold
     
     def make_tree(self, X_subset, y_subset):
         """
@@ -237,8 +298,27 @@ class DecisionTree(BaseEstimator):
         """
 
         # YOUR CODE HERE
-        
+        feature_index, threshold = self.choose_best_split(X_subset, y_subset)
+        new_node = Node(feature_index, threshold)
+        self.depth += 1
+
+        if self.depth < self.max_depth and X_subset.shape[0] >= self.min_samples_split:
+            (X_left, y_left), (X_right, y_right) = self.make_split(feature_index, threshold,
+                                                                   X_subset, y_subset)
+            new_node.left_child = self.make_tree(X_left, y_left)
+            new_node.right_child = self.make_tree(X_right, y_right)
+        else:
+            if self.classification:
+                new_node.value = np.argmax(np.sum(y_subset, axis=0))
+                new_node.probas = np.mean(y_subset, axis=0)
+            elif self.criterion_name == 'variance':
+                self.value = np.mean(y_subset)
+            else:
+                self.value = np.median(y_subset)
+
+        self.depth -= 1
         return new_node
+
         
     def fit(self, X, y):
         """
@@ -262,7 +342,20 @@ class DecisionTree(BaseEstimator):
             y = one_hot_encode(self.n_classes, y)
 
         self.root = self.make_tree(X, y)
-    
+
+    def recursive_predict(self, node, X, indices, y_predicted, probas=False):
+        if node.left_child is None:
+            if probas:
+                y_predicted[indices] = node.probas
+            else:
+                y_predicted[indices] = node.value
+        else:
+            (X_left, left_indices), (X_right, right_indices) = self.make_split(node.feature_index,
+                                                                               node.value, X,
+                                                                               indices)
+            self.recursive_predict(node.left_child, X_left, left_indices, y_predicted, probas)
+            self.recursive_predict(node.right_child, X_right, right_indices, y_predicted, probas)
+
     def predict(self, X):
         """
         Predict the target value or class label  the model from scratch using the provided data
@@ -281,7 +374,10 @@ class DecisionTree(BaseEstimator):
         """
 
         # YOUR CODE HERE
-        
+        n_objects = X.shape[0]
+        y_predicted = np.zeros(n_objects)
+        self.recursive_predict(self.root, X, np.arange(n_objects), y_predicted)
+
         return y_predicted
         
     def predict_proba(self, X):
@@ -303,5 +399,8 @@ class DecisionTree(BaseEstimator):
         assert self.classification, 'Available only for classification problem'
 
         # YOUR CODE HERE
-        
+        n_objects = X.shape[0]
+        y_predicted_probs = np.zeros((n_objects, self.n_classes))
+        self.recursive_predict(self.root, X, np.arange(n_objects), y_predicted_probs, probas=True)
+
         return y_predicted_probs
